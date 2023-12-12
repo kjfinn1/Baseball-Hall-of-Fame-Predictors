@@ -1,0 +1,1717 @@
+---
+title: "Statistical Learning Final Project"
+author: "**Kevin Finn, Will Sivolella, Jack Gallagher**"
+format: ds6030hw-html
+---
+
+```{r config, include=FALSE}
+# Set global configurations and settings here
+knitr::opts_chunk$set()                 # set global chunk options
+ggplot2::theme_set(ggplot2::theme_bw()) # set ggplot2 theme
+```
+
+# Causal Analysis
+
+Causal analysis within the realm of machine learning represents a dynamic and interdisciplinary pursuit, integrating advanced statistical methodologies, expert domain knowledge, and a nuanced understanding of causation. In this emerging field, there lies a distinct opportunity to elevate the efficacy of machine learning models, imbuing predictions with enhanced robustness and interpretability. This is particularly pertinent in intricate systems where the discernment of causal relationships is imperative for informed decision-making.
+
+## Causation vs. Correlation: A Fundamental Distinction
+
+At the heart of causal inference lies a pivotal distinction between causation and correlation. Causation denotes a direct and substantive link between a presumed cause and its ensuing effect. When a change in one variable consistently leads to a change in another, causation is inferred. However, the intricate nature of real-world data introduces the possibility of confounding factors, complicating the straightforward determination of causation.
+
+## Example: Ice Cream Sales and Unlikely Correlations
+
+Illustrating this point is the classic example examining the purported causal effect between ice cream sales and crime or drowning incidents. Superficially, a substantial correlation between these variables is apparent. Closer inspection reveals this association to be spurious. Behind the scenes, the connection emerges as a consequence of shared influences, primarily dictated by the weather. Ice cream sales surge during warmer months, aligning with increased outdoor activities, including swimming and beach attendance. Simultaneously, higher temperatures correlate with an uptick in drowning incidents and certain types of crime. This example underscores the importance of differentiating between correlation and causation, emphasizing that predictive measures alone do not provide a reliable gauge of causality.
+
+## Moving Beyond Correlations: The Essence of Causal Analysis
+
+The essence of causal analysis lies in transcending superficial observations of correlations and delving into the intricate web of underlying mechanisms propelling specific outcomes. By doing so, practitioners can unravel the complexities of cause-and-effect relationships, discerning the true drivers of phenomena. As machine learning models become increasingly sophisticated, incorporating causal analysis not only enhances the accuracy of predictions but also empowers decision-makers to comprehend and intervene effectively in complex systems. This strategic fusion of statistical acumen and domain expertise paves the way for a deeper understanding of causation within the evolving landscape of machine learning.
+
+# Causal Forest 
+
+## Causal Forest Description
+
+The concept of Causal Forest is rooted in the framework of Random Forests, which comprises multiple independent decision trees operating at various levels. Each decision tree is trained on a specific predictor or subset of the data, and their predictions collectively contribute to creating a more robust predictive model.
+Distinguishing itself from the Random Forest approach, Causal Forest integrates concepts from causal inference. While Random Forest primarily focuses on minimizing prediction error, Causal Forest aims to optimize data splits by maximizing differences across each split based on the relationships between response and predictor variables. A key distinction lies in the handling of confounding variables, where the Causal Forest algorithm strives to balance covariates across data splits, ensuring fair comparisons in each decision tree to capture true causal relationships. The overarching objective of Causal Forests is to examine how the effects of predictors vary across a sample.
+
+## Causal Forest R package
+
+For the implementation of Causal Forest in R, the grf package proves instrumental, featuring the causal_forest function. This function facilitates the creation of our model, and the package offers additional tools for analyzing the causal effects of predictor variables and assessing the accuracy of our predictive model.
+
+# Specific Implementation: Causal Forest and MLB Hall of Fame Data
+
+## Problem Overview
+
+For a specific implementation, the project will utilize the R package "Causal Forest" to delve into causal inference. The chosen data set will be MLB Hall of Fame data, providing a rich context to explore and implement causal analysis techniques. This focused application aims to showcase the practical integration of advanced statistical methodologies in addressing real-world complexities and deriving meaningful insights.
+
+```{r packages, message=FALSE, warning=FALSE}
+library(tidyverse) # functions for data manipulation
+library(Lahman)
+library(ggplot2)
+library(grf)
+library(dplyr)
+```
+
+Here we are merging a data set of all players who have ever received Hall of Fame votes with a data set containing seasonal statics of every player to have ever played in the MLB. We joined on the Player ID to only get player statistics from players who received Hall of Fame votes.
+
+::: {.callout-note title="Solution"}
+```{r}
+HallOfFameTotal<-HallOfFame %>%
+  filter(votedBy=='BBWAA' & category=='Player' & yearID >= '1950')
+
+UniquePlayers <- unique(HallOfFameTotal$playerID)
+
+UniquePlayersDF <- data.frame("playerID" = UniquePlayers)
+
+HallOfFameYes <- HallOfFame %>%
+  filter(votedBy=='BBWAA' & category=='Player' & inducted =='Y' & yearID >= '1950')
+
+HallOfFameYes <- HallOfFameYes[, c("playerID", "inducted")]
+
+merged_players <- merge(UniquePlayersDF, HallOfFameYes, by = "playerID", all = TRUE)
+
+merged_players$inducted <- ifelse(is.na(merged_players$inducted), 'N', merged_players$inducted)
+
+merged_players$HOF <- ifelse(merged_players$inducted== "N",0,1)
+
+merged_players <- merged_players[, c("playerID", "HOF")]
+```
+
+```{r}
+data("Fielding")
+player_data <- subset(Fielding, playerID %in% merged_players$playerID)
+player_data <- player_data[, c("playerID", "POS")]
+```
+
+```{r}
+most_common_position <- player_data %>%
+  group_by(playerID) %>%
+  summarize(MostCommonPosition = names(which.max(table(POS))))
+```
+
+```{r}
+merged_players <- left_join(merged_players, most_common_position, by = "playerID")
+
+merged_players <- merged_players %>% rename(POS = MostCommonPosition)
+
+```
+
+Here we split the players up by position players and pitchers because different statistics apply to these different positions. We will create different models for pitcher and position players.
+
+```{r}
+HOFP <- subset(merged_players, POS == "P")
+HOFH <- subset(merged_players, POS != "P")
+```
+
+Next, we summed all the rows (each row pertains to a single season) of player statistics that are counting variables to get career statistics for each player. We used these counting statistics to recalculate different averages.
+
+```{r}
+BattingSum <- Batting %>%
+  group_by(playerID) %>%
+  summarise(across(where(is.numeric),sum))
+PitchingSum <- Pitching %>%
+  group_by(playerID) %>%
+  summarise(across(where(is.numeric),sum))
+```
+
+
+
+```{r}
+PitchingSum <- subset(PitchingSum, select = -c(yearID, stint, BAOpp, ERA))
+BattingSum <- subset(BattingSum, select = -c(yearID, stint))
+```
+:::
+
+
+::: {.callout-note title="Solution"}
+```{r}
+HOF_hit <- left_join(HOFH, BattingSum, by = "playerID")
+HOF_pitch <- left_join(HOFP, PitchingSum, by = "playerID")
+```
+
+```{r}
+HOF_hit$SF[is.na(HOF_hit$SF)] <- 0
+HOF_hit$HBP[is.na(HOF_hit$HBP)] <- 0
+HOF_hit$IBB[is.na(HOF_hit$IBB)] <- 0
+
+# Calculate Batting Average (BA)
+HOF_hit$BA <- HOF_hit$H / HOF_hit$AB
+
+# Calculate On-Base Percentage (OBP)
+HOF_hit$OBP <- (HOF_hit$H + HOF_hit$BB) / (HOF_hit$AB + HOF_hit$BB + HOF_hit$HBP + HOF_hit$SF)
+
+# Calculate Slugging Percentage (SLG)
+HOF_hit$SLG <- (HOF_hit$H + HOF_hit$X2B + 2 * HOF_hit$X3B + 3 * HOF_hit$HR) / HOF_hit$AB
+
+HOF_hit$OPS <- HOF_hit$OBP + HOF_hit$SLG
+
+HOF_pitch$WHIP <- (HOF_pitch$H + HOF_pitch$BB + HOF_pitch$HBP)/(HOF_pitch$IPouts/3)
+
+HOF_pitch$ERA <- (HOF_pitch$ER/(HOF_pitch$IPouts/3))*9
+
+```
+
+After obtaining the data frames we want, we now need to scale the predictor data so that each value is from 0 to 1. This will help the model weight the predictors properly. 
+
+```{r}
+HOF_pitch <- subset(HOF_pitch, select = -c(WP, HBP, SH,SF, GIDP, IBB, BK, GF, IPouts, BFP, R))
+HOF_hit <- subset(HOF_hit, select = -c(CS, IBB, HBP, SH, SF, GIDP))
+```
+
+
+
+```{r}
+columns_to_normalize <- c("H", "R", "X2B", "X3B", "HR", "RBI", "SB", "BB", "BA", "OBP", "SLG")
+subset_data <- HOF_hit[, columns_to_normalize]
+
+# Normalize variables to [0, 1] range
+normalize_0_to_1 <- function(x) {
+  (x - min(x)) / (max(x) - min(x))
+}
+
+# Apply normalization function to each column
+normalized_data_hit <- as.data.frame(lapply(subset_data, normalize_0_to_1))
+
+HOF_hit <- cbind(HOF_hit$playerID, HOF_hit$HOF, HOF_hit$POS, HOF_hit$G, HOF_hit$AB, normalized_data_hit)
+
+new_column_names <- c("playerID", "HOF", "POS", "G", "AB", "H", "R", "X2B", "X3B", "HR", "RBI", "SB", "BB", "BA", "OBP", "SLG")
+colnames(HOF_hit) <- new_column_names
+
+```
+
+```{r}
+HOF_pitch <- na.omit(HOF_pitch)
+columns_to_normalize <- c("W", "L", "G", "GS", "CG", "SHO", "SV", "ER", "HR", "BB", "SO", "WHIP", "ERA")
+subset_data <- HOF_pitch[, columns_to_normalize]
+
+# Normalize variables to [0, 1] range
+normalize_0_to_1 <- function(x) {
+  (x - min(x)) / (max(x) - min(x))
+}
+
+# Apply normalization function to each column
+normalized_data_pitch <- as.data.frame(lapply(subset_data, normalize_0_to_1))
+
+HOF_pitch <- cbind(HOF_pitch$playerID, HOF_pitch$HOF, HOF_pitch$POS, normalized_data_pitch)
+
+new_column_names <- c("playerID", "HOF", "POS", "W", "L", "G", "GS", "CG", "SHO", "SV", "ER", "HR", "BB", "SO", "WHIP", "ERA")
+colnames(HOF_pitch) <- new_column_names
+
+```
+
+
+::: {.callout-note title="Solution"}
+```{r}
+HittingData <- data.frame(
+  Statistic = c(),
+  Affected = c(),
+  NotAffected = c(),
+  PercentAffected = c(),
+  MeanEffect = c()
+)
+```
+
+For our models we are creating numerous Causal Forests, where each predictor variables is set as the treatment while controlling for the other predictors. The purpose of doing this is to see the effects of each predictor while holding the other predictors constant. Therefore, we can determine the most influential player statistics that determine whether or not a player will be voted into the Hall of Fame. First we will do this for the data set of position players with hitting statistics.
+
+```{r}
+split <- sample(c(FALSE, TRUE), nrow(HOF_hit), replace = TRUE)
+HOF_hit.train <- HOF_hit[split,]
+HOF_hit.hold <- HOF_hit[!split,]
+
+
+# Isolate the "treatment" as a matrix
+treatRuns <- as.matrix(HOF_hit.train$R)
+
+# Isolate the outcome as a matrix
+HOFhitoutcome <- as.matrix(HOF_hit.train$HOF)
+
+# Use model.matrix to get our predictor matrix
+# We might also consider adding interaction terms
+Xruns <- model.matrix(lm(HOF ~ -1 + H + X2B + X3B + HR + 
+                       RBI + SB + BB + BA + OBP + 
+                       SLG, data = HOF_hit.train))
+
+# Estimate causal forest
+cfRuns <- causal_forest(Xruns,HOFhitoutcome,treatRuns, num.trees = 5000)
+
+# Get predicted causal effects for each observation
+effectsRuns <- predict(cfRuns)$predictions
+
+# And use holdout X's for prediction
+X.holdRuns <- model.matrix(lm(HOF ~ -1 + H + X2B + X3B + HR + 
+                       RBI + SB + BB + BA + OBP + 
+                       SLG, data = HOF_hit.hold))
+# And get effects
+effects.holdRuns <- predict(cfRuns, X.holdRuns)$predictions
+
+# Get standard errors for the holding data predictions - we probably should have set the num.trees
+# option in causal_forest higher before doing this, perhaps to 5000.
+SEsRuns <- sqrt(predict(cfRuns, X.holdRuns, estimate.variance = TRUE)$variance.estimates)
+```
+
+Model of hitters with runs scored as treatment variable
+
+```{r}
+estimated_effectsRuns <- effectsRuns
+
+# Extract standard errors
+standard_errorsRuns <- SEsRuns
+
+# Calculate z-scores
+z_scoresRuns <- estimated_effectsRuns / standard_errorsRuns
+
+# Set a significance level (e.g., 0.05)
+significance_level <- 0.05
+
+# Check significance
+significant_effectsRuns <- abs(z_scoresRuns) > qnorm(1 - significance_level / 2)
+
+HittingData<-rbind(HittingData, c("R", sum(significant_effectsRuns), sum(!significant_effectsRuns), sum(significant_effectsRuns)/(sum(significant_effectsRuns)+sum(!significant_effectsRuns)), mean(effectsRuns)))
+```
+
+Model of hitters with career hits as treatment variable
+
+```{r}
+# Isolate the "treatment" as a matrix
+treatHits <- as.matrix(HOF_hit.train$H)
+
+# Use model.matrix to get our predictor matrix
+# We might also consider adding interaction terms
+Xhit <- model.matrix(lm(HOF ~ -1 + R + X2B + X3B + HR + 
+                       RBI + SB + BB + BA + OBP + 
+                       SLG, data = HOF_hit.train))
+
+# Estimate causal forest
+cfHits <- causal_forest(Xhit,HOFhitoutcome,treatHits, num.trees = 5000)
+
+# Get predicted causal effects for each observation
+effectsHits <- predict(cfHits)$predictions
+
+# And use holdout X's for prediction
+X.holdHits <- model.matrix(lm(HOF ~ -1 + R + X2B + X3B + HR + 
+                       RBI + SB + BB + BA + OBP + 
+                       SLG, data = HOF_hit.hold))
+# And get effects
+effects.holdHits <- predict(cfHits, X.holdHits)$predictions
+
+# Get standard errors for the holding data predictions - we probably should have set the num.trees
+# option in causal_forest higher before doing this, perhaps to 5000.
+SEsHits <- sqrt(predict(cfHits, X.holdHits, estimate.variance = TRUE)$variance.estimates)
+```
+
+```{r}
+estimated_effectsHits <- effectsHits
+
+# Extract standard errors
+standard_errorsHits <- SEsHits
+
+# Calculate z-scores
+z_scoresHits <- estimated_effectsHits / standard_errorsHits
+
+significant_effectsHits <- abs(z_scoresHits) > qnorm(1 - significance_level / 2)
+
+HittingData<-rbind(HittingData, c("H", sum(significant_effectsHits), sum(!significant_effectsHits), sum(significant_effectsHits)/(sum(significant_effectsHits)+sum(!significant_effectsHits)), mean(effectsHits)))
+```
+
+Model of hitters with career doubles as treatment variable
+
+```{r}
+# Isolate the "treatment" as a matrix
+treatX2B <- as.matrix(HOF_hit.train$X2B)
+
+# Use model.matrix to get our predictor matrix
+# We might also consider adding interaction terms
+XX2B <- model.matrix(lm(HOF ~ -1 + R + H + X3B + HR + 
+                       RBI + SB + BB + BA + OBP + 
+                       SLG, data = HOF_hit.train))
+
+# Estimate causal forest
+cfX2B <- causal_forest(XX2B,HOFhitoutcome,treatX2B, num.trees = 5000)
+
+# Get predicted causal effects for each observation
+effectsX2B <- predict(cfX2B)$predictions
+
+# And use holdout X's for prediction
+X.holdX2B <- model.matrix(lm(HOF ~ -1 + R + H + X3B + HR + 
+                       RBI + SB + BB + BA + OBP + 
+                       SLG, data = HOF_hit.hold))
+# And get effects
+effects.holdX2B <- predict(cfX2B, X.holdX2B)$predictions
+
+# Get standard errors for the holding data predictions - we probably should have set the num.trees
+# option in causal_forest higher before doing this, perhaps to 5000.
+SEsX2B <- sqrt(predict(cfX2B, X.holdX2B, estimate.variance = TRUE)$variance.estimates)
+```
+
+```{r}
+estimated_effectsX2B <- effectsX2B
+
+# Extract standard errors
+standard_errorsX2B <- SEsX2B
+
+# Calculate z-scores
+z_scoresX2B <- estimated_effectsX2B / standard_errorsX2B
+
+significant_effectsX2B <- abs(z_scoresX2B) > qnorm(1 - significance_level / 2)
+
+HittingData<-rbind(HittingData, c("X2B", sum(significant_effectsX2B), sum(!significant_effectsX2B), sum(significant_effectsX2B)/(sum(significant_effectsX2B)+sum(!significant_effectsX2B)), mean(effectsX2B)))
+```
+
+Model of hitters with career triples as treatment variable
+
+```{r}
+# Isolate the "treatment" as a matrix
+treatX3B <- as.matrix(HOF_hit.train$X3B)
+
+# Use model.matrix to get our predictor matrix
+# We might also consider adding interaction terms
+XX3B <- model.matrix(lm(HOF ~ -1 + R + H + X2B + HR + 
+                       RBI + SB + BB + BA + OBP + 
+                       SLG, data = HOF_hit.train))
+
+# Estimate causal forest
+cfX3B <- causal_forest(XX3B,HOFhitoutcome,treatX3B, num.trees = 5000)
+
+# Get predicted causal effects for each observation
+effectsX3B <- predict(cfX3B)$predictions
+
+# And use holdout X's for prediction
+X.holdX3B <- model.matrix(lm(HOF ~ -1 + R + H + X2B + HR + 
+                       RBI + SB + BB + BA + OBP + 
+                       SLG, data = HOF_hit.hold))
+# And get effects
+effects.holdX3B <- predict(cfX3B, X.holdX3B)$predictions
+
+# Get standard errors for the holding data predictions - we probably should have set the num.trees
+# option in causal_forest higher before doing this, perhaps to 5000.
+SEsX3B <- sqrt(predict(cfX3B, X.holdX3B, estimate.variance = TRUE)$variance.estimates)
+```
+
+```{r}
+estimated_effectsX3B <- effectsX3B
+
+# Extract standard errors
+standard_errorsX3B <- SEsX3B
+
+# Calculate z-scores
+z_scoresX3B <- estimated_effectsX3B / standard_errorsX3B
+
+significant_effectsX3B <- abs(z_scoresX3B) > qnorm(1 - significance_level / 2)
+
+HittingData<-rbind(HittingData, c("X3B", sum(significant_effectsX3B), sum(!significant_effectsX3B), sum(significant_effectsX3B)/(sum(significant_effectsX3B)+sum(!significant_effectsX3B)), mean(effectsX3B)))
+```
+
+Model of hitters with career home runs as treatment variable
+
+```{r}
+# Isolate the "treatment" as a matrix
+treatHR <- as.matrix(HOF_hit.train$HR)
+
+# Use model.matrix to get our predictor matrix
+# We might also consider adding interaction terms
+XHR <- model.matrix(lm(HOF ~ -1 + R + H + X2B + X3B + 
+                       RBI + SB + BB + BA + OBP + 
+                       SLG, data = HOF_hit.train))
+
+# Estimate causal forest
+cfHR <- causal_forest(XHR,HOFhitoutcome,treatHR, num.trees = 5000)
+
+# Get predicted causal effects for each observation
+effectsHR <- predict(cfHR)$predictions
+
+# And use holdout X's for prediction
+X.holdHR <- model.matrix(lm(HOF ~ -1 + R + H + X2B + X3B + 
+                       RBI + SB + BB + BA + OBP + 
+                       SLG, data = HOF_hit.hold))
+# And get effects
+effects.holdHR <- predict(cfHR, X.holdHR)$predictions
+
+# Get standard errors for the holding data predictions - we probably should have set the num.trees
+# option in causal_forest higher before doing this, perhaps to 5000.
+SEsHR <- sqrt(predict(cfHR, X.holdHR, estimate.variance = TRUE)$variance.estimates)
+```
+
+```{r}
+estimated_effectsHR <- effectsHR
+
+# Extract standard errors
+standard_errorsHR <- SEsHR
+
+# Calculate z-scores
+z_scoresHR <- estimated_effectsHR / standard_errorsHR
+
+significant_effectsHR <- abs(z_scoresHR) > qnorm(1 - significance_level / 2)
+
+HittingData<-rbind(HittingData, c("HR", sum(significant_effectsHR), sum(!significant_effectsHR), sum(significant_effectsHR)/(sum(significant_effectsHR)+sum(!significant_effectsHR)), mean(effectsHR)))
+```
+
+Model of hitters with career RBIs as treatment variable
+
+```{r}
+# Isolate the "treatment" as a matrix
+treatRBI <- as.matrix(HOF_hit.train$RBI)
+
+# Use model.matrix to get our predictor matrix
+# We might also consider adding interaction terms
+XRBI <- model.matrix(lm(HOF ~ -1 + R + H + X2B + X3B + 
+                       HR + SB + BB + BA + OBP + 
+                       SLG, data = HOF_hit.train))
+
+# Estimate causal forest
+cfRBI <- causal_forest(XRBI,HOFhitoutcome,treatRBI, num.trees = 5000)
+
+# Get predicted causal effects for each observation
+effectsRBI <- predict(cfRBI)$predictions
+
+# And use holdout X's for prediction
+X.holdRBI <- model.matrix(lm(HOF ~ -1 + R + H + X2B + X3B + 
+                       HR + SB + BB + BA + OBP + 
+                       SLG, data = HOF_hit.hold))
+# And get effects
+effects.holdRBI <- predict(cfRBI, X.holdRBI)$predictions
+
+# Get standard errors for the holding data predictions - we probably should have set the num.trees
+# option in causal_forest higher before doing this, perhaps to 5000.
+SEsRBI <- sqrt(predict(cfRBI, X.holdRBI, estimate.variance = TRUE)$variance.estimates)
+```
+
+```{r}
+estimated_effectsRBI <- effectsRBI
+
+# Extract standard errors
+standard_errorsRBI <- SEsRBI
+
+# Calculate z-scores
+z_scoresRBI <- estimated_effectsRBI / standard_errorsRBI
+
+significant_effectsRBI <- abs(z_scoresRBI) > qnorm(1 - significance_level / 2)
+
+HittingData<-rbind(HittingData, c("RBI", sum(significant_effectsRBI), sum(!significant_effectsRBI), sum(significant_effectsRBI)/(sum(significant_effectsRBI)+sum(!significant_effectsRBI)), mean(effectsRBI)))
+```
+
+Model of hitters with career stolen bases as treatment variable
+
+```{r}
+# Isolate the "treatment" as a matrix
+treatSB <- as.matrix(HOF_hit.train$SB)
+
+# Use model.matrix to get our predictor matrix
+# We might also consider adding interaction terms
+XSB <- model.matrix(lm(HOF ~ -1 + R + H + X2B + X3B + 
+                       HR + RBI + BB + BA + OBP + 
+                       SLG, data = HOF_hit.train))
+
+# Estimate causal forest
+cfSB <- causal_forest(XSB,HOFhitoutcome,treatSB, num.trees = 5000)
+
+# Get predicted causal effects for each observation
+effectsSB <- predict(cfSB)$predictions
+
+# And use holdout X's for prediction
+X.holdSB <- model.matrix(lm(HOF ~ -1 + R + H + X2B + X3B + 
+                       HR + RBI + BB + BA + OBP + 
+                       SLG, data = HOF_hit.hold))
+# And get effects
+effects.holdSB <- predict(cfSB, X.holdSB)$predictions
+
+# Get standard errors for the holding data predictions - we probably should have set the num.trees
+# option in causal_forest higher before doing this, perhaps to 5000.
+SEsSB <- sqrt(predict(cfSB, X.holdSB, estimate.variance = TRUE)$variance.estimates)
+```
+
+```{r}
+estimated_effectsSB <- effectsSB
+
+# Extract standard errors
+standard_errorsSB <- SEsSB
+
+# Calculate z-scores
+z_scoresSB <- estimated_effectsSB / standard_errorsSB
+
+significant_effectsSB <- abs(z_scoresSB) > qnorm(1 - significance_level / 2)
+
+HittingData<-rbind(HittingData, c("SB", sum(significant_effectsSB), sum(!significant_effectsSB), sum(significant_effectsSB)/(sum(significant_effectsSB)+sum(!significant_effectsSB)), mean(effectsSB)))
+```
+
+Model of hitters with career walks as treatment variable
+
+```{r}
+# Isolate the "treatment" as a matrix
+treatBB <- as.matrix(HOF_hit.train$BB)
+
+# Use model.matrix to get our predictor matrix
+# We might also consider adding interaction terms
+XBB <- model.matrix(lm(HOF ~ -1 + R + H + X2B + X3B + 
+                       HR + RBI + SB + BA + OBP + 
+                       SLG, data = HOF_hit.train))
+
+# Estimate causal forest
+cfBB <- causal_forest(XBB,HOFhitoutcome,treatBB, num.trees = 5000)
+
+# Get predicted causal effects for each observation
+effectsBB <- predict(cfBB)$predictions
+
+# And use holdout X's for prediction
+X.holdBB <- model.matrix(lm(HOF ~ -1 + R + H + X2B + X3B + 
+                       HR + RBI + SB + BA + OBP + 
+                       SLG, data = HOF_hit.hold))
+# And get effects
+effects.holdBB <- predict(cfBB, X.holdBB)$predictions
+
+# Get standard errors for the holding data predictions - we probably should have set the num.trees
+# option in causal_forest higher before doing this, perhaps to 5000.
+SEsBB <- sqrt(predict(cfBB, X.holdBB, estimate.variance = TRUE)$variance.estimates)
+```
+
+```{r}
+estimated_effectsBB <- effectsBB
+
+# Extract standard errors
+standard_errorsBB <- SEsBB
+
+# Calculate z-scores
+z_scoresBB <- estimated_effectsBB / standard_errorsBB
+
+significant_effectsBB <- abs(z_scoresBB) > qnorm(1 - significance_level / 2)
+
+HittingData<-rbind(HittingData, c("BB", sum(significant_effectsBB), sum(!significant_effectsBB), sum(significant_effectsBB)/(sum(significant_effectsBB)+sum(!significant_effectsBB)), mean(effectsBB)))
+```
+
+Model of hitters with career batting average as treatment variable
+
+```{r}
+# Isolate the "treatment" as a matrix
+treatBA <- as.matrix(HOF_hit.train$BA)
+
+# Use model.matrix to get our predictor matrix
+# We might also consider adding interaction terms
+XBA <- model.matrix(lm(HOF ~ -1 + R + H + X2B + X3B + 
+                       HR + RBI + SB + BB + OBP + 
+                       SLG, data = HOF_hit.train))
+
+# Estimate causal forest
+cfBA <- causal_forest(XBA,HOFhitoutcome,treatBA, num.trees = 5000)
+
+# Get predicted causal effects for each observation
+effectsBA <- predict(cfBA)$predictions
+
+# And use holdout X's for prediction
+X.holdBA <- model.matrix(lm(HOF ~ -1 + R + H + X2B + X3B + 
+                       HR + RBI + SB + BB + OBP + 
+                       SLG, data = HOF_hit.hold))
+# And get effects
+effects.holdBA <- predict(cfBA, X.holdBA)$predictions
+
+# Get standard errors for the holding data predictions - we probably should have set the num.trees
+# option in causal_forest higher before doing this, perhaps to 5000.
+SEsBA <- sqrt(predict(cfBA, X.holdBA, estimate.variance = TRUE)$variance.estimates)
+```
+
+```{r}
+estimated_effectsBA <- effectsBA
+
+# Extract standard errors
+standard_errorsBA <- SEsBA
+
+# Calculate z-scores
+z_scoresBA <- estimated_effectsBA / standard_errorsBA
+
+significant_effectsBA <- abs(z_scoresBA) > qnorm(1 - significance_level / 2)
+
+HittingData<-rbind(HittingData, c("BA", sum(significant_effectsBA), sum(!significant_effectsBA), sum(significant_effectsBA)/(sum(significant_effectsBA)+sum(!significant_effectsBA)), mean(effectsBA)))
+```
+
+Model of hitters with career on-base percentage as treatment variable
+
+```{r}
+# Isolate the "treatment" as a matrix
+treatOBP <- as.matrix(HOF_hit.train$OBP)
+
+# Use model.matrix to get our predictor matrix
+# We might also consider adding interaction terms
+XOBP <- model.matrix(lm(HOF ~ -1 + R + H + X2B + X3B + 
+                       HR + RBI + SB + BB + BA + 
+                       SLG, data = HOF_hit.train))
+
+# Estimate causal forest
+cfOBP <- causal_forest(XOBP,HOFhitoutcome,treatOBP, num.trees = 5000)
+
+# Get predicted causal effects for each observation
+effectsOBP <- predict(cfOBP)$predictions
+
+# And use holdout X's for prediction
+X.holdOBP <- model.matrix(lm(HOF ~ -1 + R + H + X2B + X3B + 
+                       HR + RBI + SB + BB + BA + 
+                       SLG, data = HOF_hit.hold))
+# And get effects
+effects.holdOBP <- predict(cfOBP, X.holdOBP)$predictions
+
+# Get standard errors for the holding data predictions - we probably should have set the num.trees
+# option in causal_forest higher before doing this, perhaps to 5000.
+SEsOBP <- sqrt(predict(cfOBP, X.holdOBP, estimate.variance = TRUE)$variance.estimates)
+```
+
+```{r}
+estimated_effectsOBP <- effectsOBP
+
+# Extract standard errors
+standard_errorsOBP <- SEsOBP
+
+# Calculate z-scores
+z_scoresOBP <- estimated_effectsOBP / standard_errorsOBP
+
+significant_effectsOBP <- abs(z_scoresOBP) > qnorm(1 - significance_level / 2)
+
+HittingData<-rbind(HittingData, c("OBP", sum(significant_effectsOBP), sum(!significant_effectsOBP), sum(significant_effectsOBP)/(sum(significant_effectsOBP)+sum(!significant_effectsOBP)), mean(effectsOBP)))
+```
+
+Model of hitters with career slugging percentage as treatment variable
+
+```{r}
+# Isolate the "treatment" as a matrix
+treatSLG <- as.matrix(HOF_hit.train$SLG)
+
+# Use model.matrix to get our predictor matrix
+# We might also consider adding interaction terms
+XSLG <- model.matrix(lm(HOF ~ -1 + R + H + X2B + X3B + 
+                       HR + RBI + SB + BB + BA + 
+                       OBP, data = HOF_hit.train))
+
+# Estimate causal forest
+cfSLG <- causal_forest(XSLG,HOFhitoutcome,treatSLG, num.trees = 5000)
+
+# Get predicted causal effects for each observation
+effectsSLG <- predict(cfSLG)$predictions
+
+# And use holdout X's for prediction
+X.holdSLG <- model.matrix(lm(HOF ~ -1 + R + H + X2B + X3B + 
+                       HR + RBI + SB + BB + BA + 
+                       OBP, data = HOF_hit.hold))
+# And get effects
+effects.holdSLG <- predict(cfSLG, X.holdSLG)$predictions
+
+# Get standard errors for the holding data predictions - we probably should have set the num.trees
+# option in causal_forest higher before doing this, perhaps to 5000.
+SEsSLG <- sqrt(predict(cfSLG, X.holdSLG, estimate.variance = TRUE)$variance.estimates)
+```
+
+```{r}
+estimated_effectsSLG <- effectsSLG
+
+# Extract standard errors
+standard_errorsSLG <- SEsSLG
+
+# Calculate z-scores
+z_scoresSLG <- estimated_effectsSLG / standard_errorsSLG
+
+significant_effectsSLG <- abs(z_scoresSLG) > qnorm(1 - significance_level / 2)
+
+HittingData<-rbind(HittingData, c("SLG", sum(significant_effectsSLG), sum(!significant_effectsSLG), sum(significant_effectsSLG)/(sum(significant_effectsSLG)+sum(!significant_effectsSLG)), mean(effectsSLG)))
+```
+
+Box plots of affects of each statistic on each different player (hitters only)
+
+```{r}
+boxplot_data <- list(effects.holdRuns, effects.holdHits, effects.holdX2B, effects.holdX3B, effects.holdHR, effects.holdRBI, effects.holdSB, effects.holdBB, effects.holdBA, effects.holdOBP, effects.holdSLG)
+
+# Create a boxplot with labels for each box
+boxplot(boxplot_data, names = c("Runs", "Hits", "X2B", "X3B", "HR", "RBI", "SB", "BB", "BA", "OBP", "SLG"))
+
+
+```
+
+The box plots show the amount of influence that each player's career statistic has on their chance of getting into the hall of fame. 
+
+Bar graphs of number of players affected by different treatments and mean effect by treatment (hitters only)
+
+```{r}
+new_names <- c("Predictor", "Players_Affected", "Players_Not_Affected", "Percent_Affected", "Mean_Effect")
+names(HittingData) <- new_names
+
+HittingData
+
+HittingData$Players_Affected <- as.integer(HittingData$Players_Affected)
+HittingData$Players_Not_Affected <- as.integer(HittingData$Players_Not_Affected)
+HittingData$Percent_Affected <- as.numeric(HittingData$Percent_Affected)
+HittingData$Mean_Effect <- as.numeric(HittingData$Mean_Effect)
+
+ggplot(HittingData, aes(x = Predictor, y = Players_Affected)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(title = "Hall of Fame Voting Affected by Specific Player Statistics", x = "Statistic", y = "Number of Players Affected")
+
+ggplot(HittingData, aes(x = Predictor, y = Mean_Effect)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(title = "Hall of Fame Voting Affected by Specific Player Statistics", x = "Statistic", y = "Mean Affect") 
+```
+
+
+
+# Pitching 
+
+We will now perform the same process for the pitching data set and pitching statistics.
+
+```{r}
+PitchingData <- data.frame(
+  Statistic = c(),
+  Affected = c(),
+  NotAffected = c(),
+  PercentAffected = c(),
+  MeanEffect = c()
+)
+```
+
+Model of pitchers with career wins as treatment variable
+
+```{r}
+colnames(HOF_pitch)
+```
+```{r}
+split <- sample(c(FALSE, TRUE), nrow(HOF_pitch), replace = TRUE)
+HOF_pitch.train <- HOF_pitch[split,]
+HOF_pitch.hold <- HOF_pitch[!split,]
+
+
+# Isolate the "treatment" as a matrix
+treatW <- as.matrix(HOF_pitch.train$W)
+
+# Isolate the outcome as a matrix
+HOFpitchoutcome <- as.matrix(HOF_pitch.train$HOF)
+
+# Use model.matrix to get our predictor matrix
+# We might also consider adding interaction terms
+XW <- model.matrix(lm(HOF ~ -1 + L + G + GS + CG + 
+                       SHO + SV + ER + HR + BB + SO +
+                         WHIP + ERA, data = HOF_pitch.train))
+
+# Estimate causal forest
+cfW <- causal_forest(XW,HOFpitchoutcome,treatW, num.trees = 5000)
+
+# Get predicted causal effects for each observation
+effectsW <- predict(cfW)$predictions
+
+
+X.hold.W <- model.matrix(lm(HOF ~ -1 + L + G + GS + CG + 
+                       SHO + SV + ER + HR + BB + SO +
+                         WHIP + ERA, data = HOF_pitch.hold))
+                   
+# And get effects
+effects.hold <- predict(cfW, X.hold.W)$predictions
+
+# Get standard errors for the holding data predictions - we probably should have set the num.trees
+# option in causal_forest higher before doing this, perhaps to 5000.
+SEW <- sqrt(predict(cfW, X.hold.W, estimate.variance = TRUE)$variance.estimates)
+```
+
+```{r}
+estimated_effectsW <- effectsW
+
+# Extract standard errors
+standard_errorsW <- SEW
+
+# Calculate z-scores
+z_scoresW <- estimated_effectsW/ standard_errorsW
+
+# Set a significance level (e.g., 0.05)
+significance_level <- 0.05
+
+# Check significance
+significant_effectsW <- abs(z_scoresW) > qnorm(1 - significance_level / 2)
+
+PitchingData<-rbind(PitchingData, c("W", sum(significant_effectsW), sum(!significant_effectsW), sum(significant_effectsW)/(sum(significant_effectsW)+sum(!significant_effectsW)), mean(effectsW)))
+```
+
+Model of pitchers with career loses as treatment variable
+
+```{r}
+# Replace 'W' with 'L'
+split <- sample(c(FALSE, TRUE), nrow(HOF_pitch), replace = TRUE)
+HOF_pitch.train <- HOF_pitch[split,]
+HOF_pitch.hold <- HOF_pitch[!split,]
+
+# Isolate the "treatment" as a matrix
+treatL <- as.matrix(HOF_pitch.train$L)
+
+# Isolate the outcome as a matrix
+HOFpitchoutcome <- as.matrix(HOF_pitch.train$HOF)
+
+# Use model.matrix to get our predictor matrix
+# We might also consider adding interaction terms
+XL <- model.matrix(lm(HOF ~ -1 + W + G + GS + CG + 
+                       SHO + SV + ER + HR + BB + SO +
+                       WHIP + ERA, data = HOF_pitch.train))
+
+# Estimate causal forest
+cfL <- causal_forest(XL, HOFpitchoutcome, treatL, num.trees = 5000)
+
+# Get predicted causal effects for each observation
+effectsL <- predict(cfL)$predictions
+
+X.hold.L <- model.matrix(lm(HOF ~ -1 + W + G + GS + CG + 
+                              SHO + SV + ER + HR + BB + SO +
+                              WHIP + ERA, data = HOF_pitch.hold))
+
+# And get effects
+effects.hold <- predict(cfL, X.hold.L)$predictions
+
+# Get standard errors for the holding data predictions - we probably should have set the num.trees
+# option in causal_forest higher before doing this, perhaps to 5000.
+SEL <- sqrt(predict(cfL, X.hold.L, estimate.variance = TRUE)$variance.estimates)
+```
+
+```{r}
+
+# Replace 'W' with 'L'
+estimated_effectsL <- effectsL
+
+# Extract standard errors
+standard_errorsL <- SEL
+
+# Calculate z-scores
+z_scoresL <- estimated_effectsL / standard_errorsL
+
+# Set a significance level (e.g., 0.05)
+significance_level <- 0.05
+
+# Check significance
+significant_effectsL <- abs(z_scoresL) > qnorm(1 - significance_level / 2)
+
+# Update PitchingData with information about 'L'
+PitchingData <- rbind(
+  PitchingData,
+  c("L", 
+    sum(significant_effectsL), 
+    sum(!significant_effectsL), 
+    sum(significant_effectsL) / (sum(significant_effectsL) + sum(!significant_effectsL)), 
+    mean(effectsL))
+)
+
+
+```
+
+Model of pitchers with career games played as treatment variable
+
+```{r}
+# Replace 'L' with 'G'
+split <- sample(c(FALSE, TRUE), nrow(HOF_pitch), replace = TRUE)
+HOF_pitch.train <- HOF_pitch[split,]
+HOF_pitch.hold <- HOF_pitch[!split,]
+
+# Isolate the "treatment" as a matrix
+treatG <- as.matrix(HOF_pitch.train$G)
+
+# Isolate the outcome as a matrix
+HOFpitchoutcome <- as.matrix(HOF_pitch.train$HOF)
+
+# Use model.matrix to get our predictor matrix
+# We might also consider adding interaction terms
+XG <- model.matrix(lm(HOF ~ -1 + W + L + GS + CG + 
+                       SHO + SV + ER + HR + BB + SO +
+                       WHIP + ERA, data = HOF_pitch.train))
+
+# Estimate causal forest
+cfG <- causal_forest(XG, HOFpitchoutcome, treatG, num.trees = 5000)
+
+# Get predicted causal effects for each observation
+effectsG <- predict(cfG)$predictions
+
+X.hold.G <- model.matrix(lm(HOF ~ -1 + W + L + GS + CG + 
+                              SHO + SV + ER + HR + BB + SO +
+                              WHIP + ERA, data = HOF_pitch.hold))
+
+# And get effects
+effects.hold <- predict(cfG, X.hold.G)$predictions
+
+# Get standard errors for the holding data predictions - we probably should have set the num.trees
+# option in causal_forest higher before doing this, perhaps to 5000.
+SEG <- sqrt(predict(cfG, X.hold.G, estimate.variance = TRUE)$variance.estimates)
+
+
+```
+
+```{r}
+
+# Replace 'L' with 'G'
+estimated_effectsG <- effectsG
+
+# Extract standard errors
+standard_errorsG <- SEG
+
+# Calculate z-scores
+z_scoresG <- estimated_effectsG / standard_errorsG
+
+# Set a significance level (e.g., 0.05)
+significance_level <- 0.05
+
+# Check significance
+significant_effectsG <- abs(z_scoresG) > qnorm(1 - significance_level / 2)
+
+# Update PitchingData with information about 'G'
+PitchingData <- rbind(
+  PitchingData,
+  c("G", 
+    sum(significant_effectsG), 
+    sum(!significant_effectsG), 
+    sum(significant_effectsG) / (sum(significant_effectsG) + sum(!significant_effectsG)), 
+    mean(effectsG))
+)
+
+
+
+```
+
+Model of pitchers with career games started as treatment variable
+
+```{r}
+# Replace 'G' with 'GS'
+split <- sample(c(FALSE, TRUE), nrow(HOF_pitch), replace = TRUE)
+HOF_pitch.train <- HOF_pitch[split,]
+HOF_pitch.hold <- HOF_pitch[!split,]
+
+# Isolate the "treatment" as a matrix
+treatGS <- as.matrix(HOF_pitch.train$GS)
+
+# Isolate the outcome as a matrix
+HOFpitchoutcome <- as.matrix(HOF_pitch.train$HOF)
+
+# Use model.matrix to get our predictor matrix
+# We might also consider adding interaction terms
+XGS <- model.matrix(lm(HOF ~ -1 + W + L + G + CG + 
+                       SHO + SV + ER + HR + BB + SO +
+                       WHIP + ERA, data = HOF_pitch.train))
+
+# Estimate causal forest
+cfGS <- causal_forest(XGS, HOFpitchoutcome, treatGS, num.trees = 5000)
+
+# Get predicted causal effects for each observation
+effectsGS <- predict(cfGS)$predictions
+
+X.hold.GS <- model.matrix(lm(HOF ~ -1 + W + L + G + CG + 
+                              SHO + SV + ER + HR + BB + SO +
+                              WHIP + ERA, data = HOF_pitch.hold))
+
+# And get effects
+effects.hold <- predict(cfGS, X.hold.GS)$predictions
+
+# Get standard errors for the holding data predictions - we probably should have set the num.trees
+# option in causal_forest higher before doing this, perhaps to 5000.
+SEGS <- sqrt(predict(cfGS, X.hold.GS, estimate.variance = TRUE)$variance.estimates)
+```
+
+
+```{r}
+
+# Replace 'G' with 'GS'
+estimated_effectsGS <- effectsGS
+
+# Extract standard errors
+standard_errorsGS <- SEGS
+
+# Calculate z-scores
+z_scoresGS <- estimated_effectsGS / standard_errorsGS
+
+# Set a significance level (e.g., 0.05)
+significance_level <- 0.05
+
+# Check significance
+significant_effectsGS <- abs(z_scoresGS) > qnorm(1 - significance_level / 2)
+
+# Update PitchingData with information about 'GS'
+PitchingData <- rbind(
+  PitchingData,
+  c("GS", 
+    sum(significant_effectsGS), 
+    sum(!significant_effectsGS), 
+    sum(significant_effectsGS) / (sum(significant_effectsGS) + sum(!significant_effectsGS)), 
+    mean(effectsGS))
+)
+
+```
+
+Model of pitchers with career complete games as treatment variable
+
+```{r}
+
+# Replace 'G' with 'CG'
+split <- sample(c(FALSE, TRUE), nrow(HOF_pitch), replace = TRUE)
+HOF_pitch.train <- HOF_pitch[split,]
+HOF_pitch.hold <- HOF_pitch[!split,]
+
+# Isolate the "treatment" as a matrix
+treatCG <- as.matrix(HOF_pitch.train$CG)
+
+# Isolate the outcome as a matrix
+HOFpitchoutcome <- as.matrix(HOF_pitch.train$HOF)
+
+# Use model.matrix to get our predictor matrix
+# We might also consider adding interaction terms
+XCG <- model.matrix(lm(HOF ~ -1 + W + L + GS + G + 
+                       SHO + SV + ER + HR + BB + SO +
+                       WHIP + ERA, data = HOF_pitch.train))
+
+# Estimate causal forest
+cfCG <- causal_forest(XCG, HOFpitchoutcome, treatCG, num.trees = 5000)
+
+# Get predicted causal effects for each observation
+effectsCG <- predict(cfCG)$predictions
+
+X.hold.CG <- model.matrix(lm(HOF ~ -1 + W + L + GS + G + 
+                              SHO + SV + ER + HR + BB + SO +
+                              WHIP + ERA, data = HOF_pitch.hold))
+
+# And get effects
+effects.hold <- predict(cfCG, X.hold.CG)$predictions
+
+# Get standard errors for the holding data predictions - we probably should have set the num.trees
+# option in causal_forest higher before doing this, perhaps to 5000.
+SECG <- sqrt(predict(cfCG, X.hold.CG, estimate.variance = TRUE)$variance.estimates)
+
+
+```
+
+```{r}
+estimated_effectsCG <- effectsCG
+
+# Extract standard errors
+standard_errorsCG <- SECG
+
+# Calculate z-scores
+z_scoresCG <- estimated_effectsCG / standard_errorsCG
+
+# Set a significance level (e.g., 0.05)
+significance_level <- 0.05
+
+# Check significance
+significant_effectsCG <- abs(z_scoresCG) > qnorm(1 - significance_level / 2)
+
+# Update PitchingData with information about 'CG'
+PitchingData <- rbind(
+  PitchingData,
+  c("CG", 
+    sum(significant_effectsCG), 
+    sum(!significant_effectsCG), 
+    sum(significant_effectsCG) / (sum(significant_effectsCG) + sum(!significant_effectsCG)), 
+    mean(effectsCG))
+)
+
+```
+
+Model of pitchers with career shutouts as treatment variable
+
+```{r}
+# Replace 'CG' with 'SHO'
+split <- sample(c(FALSE, TRUE), nrow(HOF_pitch), replace = TRUE)
+HOF_pitch.train <- HOF_pitch[split,]
+HOF_pitch.hold <- HOF_pitch[!split,]
+
+# Isolate the "treatment" as a matrix
+treatSHO <- as.matrix(HOF_pitch.train$SHO)
+
+# Isolate the outcome as a matrix
+HOFpitchoutcome <- as.matrix(HOF_pitch.train$HOF)
+
+# Use model.matrix to get our predictor matrix
+# We might also consider adding interaction terms
+XSHO <- model.matrix(lm(HOF ~ -1 + W + L + GS + G + 
+                       CG+ SV + ER + HR + BB + SO +
+                       WHIP + ERA, data = HOF_pitch.train))
+
+# Estimate causal forest
+cfSHO <- causal_forest(XSHO, HOFpitchoutcome, treatSHO, num.trees = 5000)
+
+# Get predicted causal effects for each observation
+effectsSHO <- predict(cfSHO)$predictions
+
+X.hold.SHO <- model.matrix(lm(HOF ~ -1 + W + L + GS + G + 
+                              CG + SV + ER + HR + BB + SO +
+                              WHIP + ERA, data = HOF_pitch.hold))
+
+# And get effects
+effects.hold <- predict(cfSHO, X.hold.SHO)$predictions
+
+# Get standard errors for the holding data predictions - we probably should have set the num.trees
+# option in causal_forest higher before doing this, perhaps to 5000.
+SESHO <- sqrt(predict(cfSHO, X.hold.SHO, estimate.variance = TRUE)$variance.estimates)
+
+```
+
+```{r}
+# Replace 'CG' with 'SHO'
+estimated_effectsSHO <- effectsSHO
+
+# Extract standard errors
+standard_errorsSHO <- SESHO
+
+# Calculate z-scores
+z_scoresSHO <- estimated_effectsSHO / standard_errorsSHO
+
+# Set a significance level (e.g., 0.05)
+significance_level <- 0.05
+
+# Check significance
+significant_effectsSHO <- abs(z_scoresSHO) > qnorm(1 - significance_level / 2)
+
+# Update PitchingData with information about 'SHO'
+PitchingData <- rbind(
+  PitchingData,
+  c("SHO", 
+    sum(significant_effectsSHO), 
+    sum(!significant_effectsSHO), 
+    sum(significant_effectsSHO) / (sum(significant_effectsSHO) + sum(!significant_effectsSHO)), 
+    mean(effectsSHO))
+)
+
+
+```
+
+Model of pitchers with career saves as treatment variable
+
+```{r}
+
+split <- sample(c(FALSE, TRUE), nrow(HOF_pitch), replace = TRUE)
+HOF_pitch.train <- HOF_pitch[split,]
+HOF_pitch.hold <- HOF_pitch[!split,]
+
+# Isolate the "treatment" as a matrix
+treatSV <- as.matrix(HOF_pitch.train$SV)
+
+# Isolate the outcome as a matrix
+HOFpitchoutcome <- as.matrix(HOF_pitch.train$HOF)
+
+# Use model.matrix to get our predictor matrix
+# We might also consider adding interaction terms
+XSV <- model.matrix(lm(HOF ~ -1 + W + L + GS + G + 
+                       CG + SHO + ER + HR + BB + SO +
+                       WHIP + ERA, data = HOF_pitch.train))
+
+# Estimate causal forest
+cfSV <- causal_forest(XSV, HOFpitchoutcome, treatSV, num.trees = 5000)
+
+# Get predicted causal effects for each observation
+effectsSV <- predict(cfSV)$predictions
+
+X.hold.SV <- model.matrix(lm(HOF ~ -1 + W + L + GS + G + 
+                              CG + SHO + ER + HR + BB + SO +
+                              WHIP + ERA, data = HOF_pitch.hold))
+
+# And get effects
+effects.hold <- predict(cfSV, X.hold.SV)$predictions
+
+# Get standard errors for the holding data predictions - we probably should have set the num.trees
+# option in causal_forest higher before doing this, perhaps to 5000.
+SESV <- sqrt(predict(cfSV, X.hold.SV, estimate.variance = TRUE)$variance.estimates)
+
+```
+
+
+```{r}
+
+# Replace 'SHO' with 'SV'
+estimated_effectsSV <- effectsSV
+
+# Extract standard errors
+standard_errorsSV <- SESV
+
+# Calculate z-scores
+z_scoresSV <- estimated_effectsSV / standard_errorsSV
+
+# Set a significance level (e.g., 0.05)
+significance_level <- 0.05
+
+# Check significance
+significant_effectsSV <- abs(z_scoresSV) > qnorm(1 - significance_level / 2)
+
+# Update PitchingData with information about 'SV'
+PitchingData <- rbind(
+  PitchingData,
+  c("SV", 
+    sum(significant_effectsSV), 
+    sum(!significant_effectsSV), 
+    sum(significant_effectsSV) / (sum(significant_effectsSV) + sum(!significant_effectsSV)), 
+    mean(effectsSV))
+)
+
+
+
+```
+
+Model of pitchers with career earned runs given up as treatment variable
+
+```{r}
+
+# Replace 'SV' with 'ER'
+split <- sample(c(FALSE, TRUE), nrow(HOF_pitch), replace = TRUE)
+HOF_pitch.train <- HOF_pitch[split,]
+HOF_pitch.hold <- HOF_pitch[!split,]
+
+# Isolate the "treatment" as a matrix
+treatER <- as.matrix(HOF_pitch.train$ER)
+
+# Isolate the outcome as a matrix
+HOFpitchoutcome <- as.matrix(HOF_pitch.train$HOF)
+
+# Use model.matrix to get our predictor matrix
+# We might also consider adding interaction terms
+XER <- model.matrix(lm(HOF ~ -1 + W + L + GS + G + 
+                       CG + SHO + SV + HR + BB + SO +
+                       WHIP + ERA, data = HOF_pitch.train))
+
+# Estimate causal forest
+cfER <- causal_forest(XER, HOFpitchoutcome, treatER, num.trees = 5000)
+
+# Get predicted causal effects for each observation
+effectsER <- predict(cfER)$predictions
+
+X.hold.ER <- model.matrix(lm(HOF ~ -1 + W + L + GS + G + 
+                              CG + SHO + SV + HR + BB + SO +
+                              WHIP + ERA, data = HOF_pitch.hold))
+
+# And get effects
+effects.hold <- predict(cfER, X.hold.ER)$predictions
+
+# Get standard errors for the holding data predictions - we probably should have set the num.trees
+# option in causal_forest higher before doing this, perhaps to 5000.
+SEER <- sqrt(predict(cfER, X.hold.ER, estimate.variance = TRUE)$variance.estimates)
+```
+
+```{r}
+
+
+# Replace 'SV' with 'ER'
+estimated_effectsER <- effectsER
+
+# Extract standard errors
+standard_errorsER <- SEER
+
+# Calculate z-scores
+z_scoresER <- estimated_effectsER / standard_errorsER
+
+# Set a significance level (e.g., 0.05)
+significance_level <- 0.05
+
+# Check significance
+significant_effectsER <- abs(z_scoresER) > qnorm(1 - significance_level / 2)
+
+# Update PitchingData with information about 'ER'
+PitchingData <- rbind(
+  PitchingData,
+  c("ER", 
+    sum(significant_effectsER), 
+    sum(!significant_effectsER), 
+    sum(significant_effectsER) / (sum(significant_effectsER) + sum(!significant_effectsER)), 
+    mean(effectsER))
+)
+
+
+```
+
+Model of pitchers with career home runs given up as treatment variable
+
+```{r}
+
+# Replace 'SV' with 'HR'
+split <- sample(c(FALSE, TRUE), nrow(HOF_pitch), replace = TRUE)
+HOF_pitch.train <- HOF_pitch[split,]
+HOF_pitch.hold <- HOF_pitch[!split,]
+
+# Isolate the "treatment" as a matrix
+treatHR <- as.matrix(HOF_pitch.train$HR)
+
+# Isolate the outcome as a matrix
+HOFpitchoutcome <- as.matrix(HOF_pitch.train$HOF)
+
+# Use model.matrix to get our predictor matrix
+# We might also consider adding interaction terms
+XHR <- model.matrix(lm(HOF ~ -1 + W + L + GS + G + 
+                       CG + SHO + ER + SV + BB + SO +
+                       WHIP + ERA, data = HOF_pitch.train))
+
+# Estimate causal forest
+cfHR <- causal_forest(XHR, HOFpitchoutcome, treatHR, num.trees = 5000)
+
+# Get predicted causal effects for each observation
+effectsHR <- predict(cfHR)$predictions
+
+X.hold.HR <- model.matrix(lm(HOF ~ -1 + W + L + GS + G + 
+                              CG + SHO + ER + SV + BB + SO +
+                              WHIP + ERA, data = HOF_pitch.hold))
+
+# And get effects
+effects.hold <- predict(cfHR, X.hold.HR)$predictions
+
+# Get standard errors for the holding data predictions - we probably should have set the num.trees
+# option in causal_forest higher before doing this, perhaps to 5000.
+SEHR <- sqrt(predict(cfHR, X.hold.HR, estimate.variance = TRUE)$variance.estimates)
+
+
+
+```
+
+
+```{r}
+
+
+# Replace 'ER' with 'HR'
+estimated_effectsHR <- effectsHR
+
+# Extract standard errors
+standard_errorsHR <- SEHR
+
+# Calculate z-scores
+z_scoresHR <- estimated_effectsHR / standard_errorsHR
+
+# Set a significance level (e.g., 0.05)
+significance_level <- 0.05
+
+# Check significance
+significant_effectsHR <- abs(z_scoresHR) > qnorm(1 - significance_level / 2)
+
+# Update PitchingData with information about 'HR'
+PitchingData <- rbind(
+  PitchingData,
+  c("HR", 
+    sum(significant_effectsHR), 
+    sum(!significant_effectsHR), 
+    sum(significant_effectsHR) / (sum(significant_effectsHR) + sum(!significant_effectsHR)), 
+    mean(effectsHR))
+)
+
+
+```
+
+Model of pitchers with career walks allowed as treatment variable
+
+```{r}
+
+# Replace 'HR' with 'BB'
+split <- sample(c(FALSE, TRUE), nrow(HOF_pitch), replace = TRUE)
+HOF_pitch.train <- HOF_pitch[split,]
+HOF_pitch.hold <- HOF_pitch[!split,]
+
+# Isolate the "treatment" as a matrix
+treatBB <- as.matrix(HOF_pitch.train$BB)
+
+# Isolate the outcome as a matrix
+HOFpitchoutcome <- as.matrix(HOF_pitch.train$HOF)
+
+# Use model.matrix to get our predictor matrix
+# We might also consider adding interaction terms
+XBB <- model.matrix(lm(HOF ~ -1 + W + L + GS + G + 
+                       CG + SHO + ER + SV + HR + SO +
+                       WHIP + ERA, data = HOF_pitch.train))
+
+# Estimate causal forest
+cfBB <- causal_forest(XBB, HOFpitchoutcome, treatBB, num.trees = 5000)
+
+# Get predicted causal effects for each observation
+effectsBB <- predict(cfBB)$predictions
+
+X.hold.BB <- model.matrix(lm(HOF ~ -1 + W + L + GS + G + 
+                              CG + SHO + ER + SV + HR + SO +
+                              WHIP + ERA, data = HOF_pitch.hold))
+
+# And get effects
+effects.hold <- predict(cfBB, X.hold.BB)$predictions
+
+# Get standard errors for the holding data predictions - we probably should have set the num.trees
+# option in causal_forest higher before doing this, perhaps to 5000.
+SEBB <- sqrt(predict(cfBB, X.hold.BB, estimate.variance = TRUE)$variance.estimates)
+
+```
+
+```{r}
+
+# Replace 'HR' with 'BB'
+estimated_effectsBB <- effectsBB
+
+# Extract standard errors
+standard_errorsBB <- SEBB
+
+# Calculate z-scores
+z_scoresBB <- estimated_effectsBB / standard_errorsBB
+
+# Set a significance level (e.g., 0.05)
+significance_level <- 0.05
+
+# Check significance
+significant_effectsBB <- abs(z_scoresBB) > qnorm(1 - significance_level / 2)
+
+# Update PitchingData with information about 'BB'
+PitchingData <- rbind(
+  PitchingData,
+  c("BB", 
+    sum(significant_effectsBB), 
+    sum(!significant_effectsBB), 
+    sum(significant_effectsBB) / (sum(significant_effectsBB) + sum(!significant_effectsBB)), 
+    mean(effectsBB))
+)
+
+
+```
+
+Model of pitchers with career strikeouts as treatment variable
+
+```{r}
+# Replace 'BB' with 'SO'
+split <- sample(c(FALSE, TRUE), nrow(HOF_pitch), replace = TRUE)
+HOF_pitch.train <- HOF_pitch[split,]
+HOF_pitch.hold <- HOF_pitch[!split,]
+
+# Isolate the "treatment" as a matrix
+treatSO <- as.matrix(HOF_pitch.train$SO)
+
+# Isolate the outcome as a matrix
+HOFpitchoutcome <- as.matrix(HOF_pitch.train$HOF)
+
+# Use model.matrix to get our predictor matrix
+# We might also consider adding interaction terms
+XSO <- model.matrix(lm(HOF ~ -1 + W + L + GS + G + 
+                       CG + SHO + ER + SV + HR + BB +
+                       WHIP + ERA, data = HOF_pitch.train))
+
+# Estimate causal forest
+cfSO <- causal_forest(XSO, HOFpitchoutcome, treatSO, num.trees = 5000)
+
+# Get predicted causal effects for each observation
+effectsSO <- predict(cfSO)$predictions
+
+X.hold.SO <- model.matrix(lm(HOF ~ -1 + W + L + GS + G + 
+                              CG + SHO + ER + SV + HR + BB +
+                              WHIP + ERA, data = HOF_pitch.hold))
+
+# And get effects
+effects.hold <- predict(cfSO, X.hold.SO)$predictions
+
+# Get standard errors for the holding data predictions - we probably should have set the num.trees
+# option in causal_forest higher before doing this, perhaps to 5000.
+SESO <- sqrt(predict(cfSO, X.hold.SO, estimate.variance = TRUE)$variance.estimates)
+
+
+```
+
+
+```{r}
+
+# Replace 'BB' with 'SO'
+estimated_effectsSO <- effectsSO
+
+# Extract standard errors
+standard_errorsSO <- SESO
+
+# Calculate z-scores
+z_scoresSO <- estimated_effectsSO / standard_errorsSO
+
+# Set a significance level (e.g., 0.05)
+significance_level <- 0.05
+
+# Check significance
+significant_effectsSO <- abs(z_scoresSO) > qnorm(1 - significance_level / 2)
+
+# Update PitchingData with information about 'SO'
+PitchingData <- rbind(
+  PitchingData,
+  c("SO", 
+    sum(significant_effectsSO), 
+    sum(!significant_effectsSO), 
+    sum(significant_effectsSO) / (sum(significant_effectsSO) + sum(!significant_effectsSO)), 
+    mean(effectsSO))
+)
+```
+
+Model of pitchers with career WHIP (walks and hits given up per inning pitched) as treatment variable
+
+```{r}
+
+# Replace 'SO' with 'WHIP'
+split <- sample(c(FALSE, TRUE), nrow(HOF_pitch), replace = TRUE)
+HOF_pitch.train <- HOF_pitch[split,]
+HOF_pitch.hold <- HOF_pitch[!split,]
+
+# Isolate the "treatment" as a matrix
+treatWHIP <- as.matrix(HOF_pitch.train$WHIP)
+
+# Isolate the outcome as a matrix
+HOFpitchoutcome <- as.matrix(HOF_pitch.train$HOF)
+
+# Use model.matrix to get our predictor matrix
+# We might also consider adding interaction terms
+XWHIP <- model.matrix(lm(HOF ~ -1 + W + L + GS + G + 
+                         CG + SHO + ER + SV + HR + BB +
+                         SO + ERA, data = HOF_pitch.train))
+
+# Estimate causal forest
+cfWHIP <- causal_forest(XWHIP, HOFpitchoutcome, treatWHIP, num.trees = 5000)
+
+# Get predicted causal effects for each observation
+effectsWHIP <- predict(cfWHIP)$predictions
+
+X.hold.WHIP <- model.matrix(lm(HOF ~ -1 + W + L + GS + G + 
+                                CG + SHO + ER + SV + HR + BB +
+                                SO + ERA, data = HOF_pitch.hold))
+
+# And get effects
+effects.hold <- predict(cfWHIP, X.hold.WHIP)$predictions
+
+# Get standard errors for the holding data predictions - we probably should have set the num.trees
+# option in causal_forest higher before doing this, perhaps to 5000.
+SEWHIP <- sqrt(predict(cfWHIP, X.hold.WHIP, estimate.variance = TRUE)$variance.estimates)
+
+```
+
+```{r}
+# Replace 'SO' with 'WHIP'
+estimated_effectsWHIP <- effectsWHIP
+
+# Extract standard errors
+standard_errorsWHIP <- SEWHIP
+
+# Calculate z-scores
+z_scoresWHIP <- estimated_effectsWHIP / standard_errorsWHIP
+
+# Set a significance level (e.g., 0.05)
+significance_level <- 0.05
+
+# Check significance
+significant_effectsWHIP <- abs(z_scoresWHIP) > qnorm(1 - significance_level / 2)
+
+# Update PitchingData with information about 'WHIP'
+PitchingData <- rbind(
+  PitchingData,
+  c("WHIP", 
+    sum(significant_effectsWHIP), 
+    sum(!significant_effectsWHIP), 
+    sum(significant_effectsWHIP) / (sum(significant_effectsWHIP) + sum(!significant_effectsWHIP)), 
+    mean(effectsWHIP))
+)
+
+```
+
+Model of pitchers with career ERA (earned runs average) as treatment variable
+
+```{r}
+
+# Replace 'WHIP' with 'ERA'
+split <- sample(c(FALSE, TRUE), nrow(HOF_pitch), replace = TRUE)
+HOF_pitch.train <- HOF_pitch[split,]
+HOF_pitch.hold <- HOF_pitch[!split,]
+
+# Isolate the "treatment" as a matrix
+treatERA <- as.matrix(HOF_pitch.train$ERA)
+
+# Isolate the outcome as a matrix
+HOFpitchoutcome <- as.matrix(HOF_pitch.train$HOF)
+
+# Use model.matrix to get our predictor matrix
+# We might also consider adding interaction terms
+XERA <- model.matrix(lm(HOF ~ -1 + W + L + GS + G + 
+                        CG + SHO + ER + SV + HR + BB +
+                        SO + WHIP, data = HOF_pitch.train))
+
+# Estimate causal forest
+cfERA <- causal_forest(XERA, HOFpitchoutcome, treatERA, num.trees = 5000)
+
+# Get predicted causal effects for each observation
+effectsERA <- predict(cfERA)$predictions
+
+X.hold.ERA <- model.matrix(lm(HOF ~ -1 + W + L + GS + G + 
+                               CG + SHO + ER + SV + HR + BB +
+                               SO + WHIP, data = HOF_pitch.hold))
+
+# And get effects
+effects.hold <- predict(cfERA, X.hold.ERA)$predictions
+
+# Get standard errors for the holding data predictions - we probably should have set the num.trees
+# option in causal_forest higher before doing this, perhaps to 5000.
+SEERA <- sqrt(predict(cfERA, X.hold.ERA, estimate.variance = TRUE)$variance.estimates)
+
+```
+
+
+```{r}
+
+# Replace 'WHIP' with 'ERA'
+estimated_effectsERA <- effectsERA
+
+# Extract standard errors
+standard_errorsERA <- SEERA
+
+# Calculate z-scores
+z_scoresERA <- estimated_effectsERA / standard_errorsERA
+
+# Set a significance level (e.g., 0.05)
+significance_level <- 0.05
+
+# Check significance
+significant_effectsERA <- abs(z_scoresERA) > qnorm(1 - significance_level / 2)
+
+# Update PitchingData with information about 'ERA'
+PitchingData <- rbind(
+  PitchingData,
+  c("ERA", 
+    sum(significant_effectsERA), 
+    sum(!significant_effectsERA), 
+    sum(significant_effectsERA) / (sum(significant_effectsERA) + sum(!significant_effectsERA)), 
+    mean(effectsERA))
+)
+
+
+```
+
+```{r}
+effects.holdERA <- predict(cfERA, X.hold.ERA)$predictions
+```
+
+
+```{r}
+effects.holdW <- predict(cfW, X.hold.W)$predictions
+effects.holdL <- predict(cfL, X.hold.L)$predictions
+effects.holdG <- predict(cfG, X.hold.G)$predictions
+effects.holdGS <- predict(cfGS, X.hold.GS)$predictions
+effects.holdCG <- predict(cfCG, X.hold.CG)$predictions
+effects.holdSHO <- predict(cfSHO, X.hold.SHO)$predictions
+effects.holdSV <- predict(cfSV, X.hold.SV)$predictions
+effects.holdER <- predict(cfER, X.hold.ER)$predictions
+effects.holdHR <- predict(cfHR, X.hold.HR)$predictions
+effects.holdBB <- predict(cfBB, X.hold.BB)$predictions
+effects.holdSO <- predict(cfSO, X.hold.SO)$predictions
+effects.holdWHIP <- predict(cfWHIP, X.hold.WHIP)$predictions
+```
+
+
+```{r}
+#par(mar = c(10, 10, 10, 10) + 0.1)
+
+boxplot_data_pitch <- list(effects.holdW, effects.holdL, effects.holdG, effects.holdGS, effects.holdCG, effects.holdSHO, effects.holdSV, effects.holdER, effects.holdHR, effects.holdBB, effects.holdSO, effects.holdWHIP, effects.holdERA)
+
+# Create a boxplot with labels for each box
+boxplot(boxplot_data_pitch, names = c("W", "L", "G", "GS", "CG", "SH", "SV", "ER", "HR", "BB", "SO", "WH", "EA"))
+```
+
+The box plots illustrate the causal influence of each pitcher's career statistics on their likelihood of getting into the Hall of Fame. Each box plot represents the distribution of a specific career statistic among pitchers, and the vertical axis denotes the predicted or observed chance of Hall of Fame induction. The plots provide insights into how variations in individual career statistics may contribute to the overall likelihood of being inducted into the Hall of Fame for pitchers.
+
+```{r}
+new_names <- c("Predictor", "Players_Affected", "Players_Not_Affected", "Percent_Affected", "Mean_Effect")
+names(PitchingData) <- new_names
+
+PitchingData
+
+PitchingData$Players_Affected <- as.integer(PitchingData$Players_Affected)
+PitchingData$Players_Not_Affected <- as.integer(PitchingData$Players_Not_Affected)
+PitchingData$Percent_Affected <- as.numeric(PitchingData$Percent_Affected)
+PitchingData$Mean_Effect <- as.numeric(PitchingData$Mean_Effect)
+
+ggplot(PitchingData, aes(x = Predictor, y = Players_Affected)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(title = "Hall of Fame Voting Affected by Specific Pitcher Statistics", x = "Statistic", y = "Number of Pitchers Affected")
+
+ggplot(PitchingData, aes(x = Predictor, y = Mean_Effect)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(title = "Hall of Fame Voting Affected by Specific Pitcher Statistics", x = "Statistic", y = "Mean Affect") 
+```
+
+The bar plots show the number of players affected by each statistic when determining the likelihood of them making the Hall of Fame and the mean effect of each statistic when determining the likelihood of players' making the Hall of Fame. 
+
+# Conclusion
+
+This study serves as a tangible demonstration of the practical application of causal analysis, offering valuable insights into the factors that significantly influence a player's likelihood of making it into the Hall of Fame. Through rigorous causal analysis techniques, we were able to discern the impacts of each variable, encompassing various career statistics, on the intricate process of determining Hall of Fame induction. This real-world example showcases the power of causal analysis in unraveling the complex interplay between individual player performance metrics and the ultimate recognition bestowed upon them. Such insights not only contribute to a deeper understanding of the dynamics underlying Hall of Fame selections but also provide a robust framework for informed decision-making and strategic considerations within the realm of baseball analytics.
+
+In a broader context, this investigation underscores the versatility of causal analysis methodologies beyond the specific domain of baseball. The ability to disentangle causal relationships between variables extends to numerous fields, from social sciences and economics to healthcare and policy-making. By employing rigorous causal analysis, researchers and decision-makers gain a systematic approach to uncovering the drivers of outcomes, allowing for more informed and strategic interventions. The success of this study in unraveling the complexities of Hall of Fame induction criteria exemplifies how causal analysis can illuminate the underlying mechanisms in any complex system. As we delve into the intricacies of causal relationships, we pave the way for a more nuanced understanding of phenomena and, consequently, more effective decision-making in a wide array of disciplines.
+
